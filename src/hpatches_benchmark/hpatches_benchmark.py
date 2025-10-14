@@ -3,6 +3,7 @@ import logging
 from hpatches_benchmark.benchmark.benchmark import run_benchmark
 from datetime import datetime
 from os import path
+from hpatches_benchmark.utils.logger import logger
 import pandas as pd
 
 from hpatches_benchmark.dataset.hpatches import HPatches
@@ -103,6 +104,23 @@ def main() -> None:
     output_dir = args.output
     detectors = [sift_detector, orb_detector, superpoint_detector]
     norms = [cv2.NORM_L2, cv2.NORM_HAMMING, cv2.NORM_L2]
+    try:
+        from hpatches_benchmark.detectors.r2d2 import r2d2_detector
+    except Exception as e:
+        logger.info("Skipping R2D2 as it is not installed. It can be installed from the .whl released here: https://github.com/mrjoe3012/r2d2/releases/latest") 
+    else:
+        accept_file = '.accepted-r2d2-license'
+        if not path.exists(accept_file):
+            resp = input("You have installed the R2D2 package. By continuing you: " \
+            "\n\t1) Acknowledge the original creators of R2D2 https://github.com/naver/r2d2"
+            "\n\t2) Accept the terms of the R2D2 license, which can be read here https://github.com/naver/r2d2/blob/master/LICENSE" \
+            "\nDo you accept? (y/n): ").lower()
+        else:
+            resp = 'y'
+        if resp == 'y':
+            with open(accept_file, 'w') as f: pass
+            detectors.append(r2d2_detector)
+            norms.append(cv2.NORM_L2)
     evaluate_detectors(
         detectors, norms,
         output_root=output_dir, hpatches_directory=hpatches_dir,
