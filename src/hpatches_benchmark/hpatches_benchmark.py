@@ -4,12 +4,12 @@ from hpatches_benchmark.benchmark.benchmark import run_benchmark
 from datetime import datetime
 from os import path
 import pandas as pd
-import numpy as np
 
 from hpatches_benchmark.dataset.hpatches import HPatches
 from hpatches_benchmark.detectors.detector import Detector
 from hpatches_benchmark.detectors.sift import sift_detector
 from hpatches_benchmark.detectors.orb import orb_detector
+from hpatches_benchmark.detectors.superpoint import superpoint_detector
 import cv2
 import os
 import argparse
@@ -101,8 +101,8 @@ def main() -> None:
     args = parser.parse_args()
     hpatches_dir = args.hpatches
     output_dir = args.output
-    detectors = [sift_detector, orb_detector]
-    norms = [cv2.NORM_L2, cv2.NORM_HAMMING]
+    detectors = [sift_detector, orb_detector, superpoint_detector]
+    norms = [cv2.NORM_L2, cv2.NORM_HAMMING, cv2.NORM_L2]
     evaluate_detectors(
         detectors, norms,
         output_root=output_dir, hpatches_directory=hpatches_dir,
