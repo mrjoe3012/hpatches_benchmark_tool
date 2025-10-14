@@ -1,5 +1,7 @@
 from dataclasses import dataclass
+from typing import Literal
 import numpy as np
+from os import path
 
 __all__ = ['ImageWithHomography']
 
@@ -11,8 +13,9 @@ class ImageWithHomography:
     filepath: str
 
     @property
-    def task(self) -> str:
-        if self.filepath.startswith('v_'): return 'viewpoint'
-        elif self.filepath.startswith('i_'): return 'intensity'
+    def task(self) -> Literal['viewpoint', 'intensity']:
+        name = path.basename(path.dirname(self.filepath))
+        if name.startswith('v_'): return 'viewpoint'
+        elif name.startswith('i_'): return 'intensity'
         else:
             raise RuntimeError(f"Unrecognised task! path: '{self.filepath}'")

@@ -24,7 +24,7 @@ class HPatches:
                 if path.isdir(path.join(root_directory, x))
         ]
         image_sets = []
-        for subdirectory in pbar(subdirectories):
+        for subdirectory in pbar(subdirectories, "Loading HPatches"):
             name = path.basename(subdirectory)
             og_img_path = path.join(subdirectory, '1.ppm') 
             og_img = cv2.imread(og_img_path)
