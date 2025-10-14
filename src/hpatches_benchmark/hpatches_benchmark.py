@@ -97,11 +97,15 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument('--hpatches', type=str, required=True, help='Path to HPatches' \
         ' dataset directory.')
+    parser.add_argument('--output', type=str, default='.')
     args = parser.parse_args()
     hpatches_dir = args.hpatches
+    output_dir = args.output
+    detectors = [sift_detector, orb_detector]
+    norms = [cv2.NORM_L2, cv2.NORM_HAMMING]
     evaluate_detectors(
-        [sift_detector, orb_detector], [cv2.NORM_L2, cv2.NORM_HAMMING],
-        output_root='.', hpatches_directory=hpatches_dir
+        detectors, norms,
+        output_root=output_dir, hpatches_directory=hpatches_dir,
     )
 
 if __name__ == '__main__': main()

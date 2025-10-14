@@ -24,17 +24,12 @@ __all__ = ['run_benchmark']
 
 def get_features(img: ImageWithHomography, detector: Detector,
                  img_size: tuple[int, int]) -> Features:
-    # resize imgs if necessary
-    if img_size is None:
-        og_img = img.original_img_bgr
-        transformed_img = img.transformed_img_bgr
-        scaling1 = [1, 1]
-        scaling2 = [1, 1]
-    else:
-        og_img = cv2.resize(img.original_img_bgr, img_size)
-        transformed_img = cv2.resize(img.transformed_img_bgr, img_size)
-        scaling1 = [img.original_img_bgr.shape[1] / img_size[0], img.original_img_bgr.shape[0] / img_size[1]]
-        scaling2 = [img.transformed_img_bgr.shape[1] / img_size[0], img.transformed_img_bgr.shape[0] / img_size[1]]
+    # resize imgs
+    width, height = img_size
+    og_img = cv2.resize(img.original_img_bgr, img_size)
+    transformed_img = cv2.resize(img.transformed_img_bgr, img_size)
+    scaling1 = [img.original_img_bgr.shape[1] / width, img.original_img_bgr.shape[0] / height]
+    scaling2 = [img.transformed_img_bgr.shape[1] / width, img.transformed_img_bgr.shape[0] / height]
     # detect features
     kp1, des1 = detector(og_img)
     kp2, des2 = detector(transformed_img)
@@ -66,9 +61,7 @@ def get_matches(features: Features, norm: int, n_kpts: int, ratio_t: float) -> M
 def get_homography(matches: Matches, img_size: tuple[int, int]) -> HomographyEstimate:
     width, height = img_size
     img1_shape = matches.features.img.original_img_bgr.shape
-    # img2_shape = matches.features.img.transformed_img_bgr.shape
-    scale = [img_size[0] / img1_shape[1], img_size[1] / img1_shape[0]]
-    # scale2 = [img_size[0] / img2_shape[1], img_size[1] / img2_shape[0]]
+    scale = [width / img1_shape[1], height / img1_shape[0]]
     # compute homography
     pred_homography = None
     match_indices = matches.indices
@@ -89,11 +82,11 @@ def get_homography(matches: Matches, img_size: tuple[int, int]) -> HomographyEst
     H_pred = pred_homography
     H_true = matches.features.img.homography
     img_corners = np.array([
-        0, 0,
-        width, 0,
-        0, height,
-        width, height
-    ]).reshape(4, 2)
+        1, 1,
+        width, 1,
+        1, height,
+        width, height,
+    ]).reshape(4, 2) - 1
     img_corners_pred = apply_homography(
         img_corners, H_pred
     )
@@ -146,7 +139,9 @@ def evaluate_homography(homography_estimate: HomographyEstimate, epsilon: np.nda
 def compute_repeatability_helper(transformed: np.ndarray, true: np.ndarray,
                                  epsilon: np.ndarray, img_size: tuple[int, int]) -> np.ndarray:
     transformed_within_img = np.all(transformed >= [0, 0], axis=-1) \
-        & np.all(transformed <= img_size, axis=-1)
+        & np.all(transformed < img_size, axis=-1)
+    if transformed_within_img.size == 0 or true.size == 0:
+        return np.full(epsilon.shape, 0.0), np.full(epsilon.shape, 1.0)
     dists = np.linalg.norm(
         true[None, :] \
             - transformed[transformed_within_img, None],
@@ -285,7 +280,14 @@ def run_benchmark(hpatches: HPatches, n_kpts: int,
             else:
                 logger.warning(f"Less than four matches for '{img_with_homo.filepath}'!")
                 homography_evaluation = HomographyEvaluation(
-                    np.full((3, 3), np.nan),
+                    HomographyEstimate(
+                        matches,
+                        np.full((3, 3), np.nan),
+                        np.full((len(matches.indices), 2), np.nan),
+                        np.full((len(matches.indices), 2), np.nan),
+                        np.full((4, 2), np.nan),
+                        np.full((4, 2), np.nan)
+                    ),
                     epsilon,
                     np.full(epsilon.shape, np.nan),
                     np.full(epsilon.shape, 0),
