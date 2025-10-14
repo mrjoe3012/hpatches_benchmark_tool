@@ -110,6 +110,10 @@ def get_homography(matches: Matches, img_size: tuple[int, int]) -> HomographyEst
     )
 
 def evaluate_homography(homography_estimate: HomographyEstimate, epsilon: np.ndarray) -> HomographyEvaluation:
+    if np.any(np.isnan(homography_estimate.estimated_homography)):
+        return HomographyEvaluation.construct_empty(
+            homography_estimate.matches, epsilon
+        )
     mean_corner_error = np.mean(
         np.linalg.norm(
             homography_estimate.corner_ground_truth - homography_estimate.corner_prediction,
@@ -274,24 +278,18 @@ def run_benchmark(hpatches: HPatches, n_kpts: int,
                 homography_estimate = get_homography(
                     matches, img_size_wh
                 )
-                homography_evaluation = evaluate_homography(
-                    homography_estimate, epsilon
-                )
+                if homography_estimate.is_valid:
+                    homography_evaluation = evaluate_homography(
+                        homography_estimate, epsilon
+                    )
+                else:
+                    homography_evaluation = HomographyEvaluation.construct_empty(
+                        matches, epsilon
+                    )
             else:
                 logger.warning(f"Less than four matches for '{img_with_homo.filepath}'!")
-                homography_evaluation = HomographyEvaluation(
-                    HomographyEstimate(
-                        matches,
-                        np.full((3, 3), np.nan),
-                        np.full((len(matches.indices), 2), np.nan),
-                        np.full((len(matches.indices), 2), np.nan),
-                        np.full((4, 2), np.nan),
-                        np.full((4, 2), np.nan)
-                    ),
-                    epsilon,
-                    np.full(epsilon.shape, np.nan),
-                    np.full(epsilon.shape, 0),
-                    np.inf
+                homography_evaluation = HomographyEvaluation.construct_empty(
+                    matches, epsilon
                 )
             repeatability_evaluation = evaluate_repeatability(
                 features, epsilon, n_kpts, img_size_wh
