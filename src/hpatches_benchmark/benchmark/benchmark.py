@@ -33,26 +33,40 @@ def get_features(img: ImageWithHomography, detector: Detector,
     # detect features
     kp1, des1 = detector(og_img)
     kp2, des2 = detector(transformed_img)
+    # keep only shared features
+    kp1_t_H = apply_homography(
+        kp1, img.homography
+    )
+    mask1 = \
+        np.all(kp1_t_H >= [0, 0], axis=-1) & np.all(kp1_t_H < [width, height], axis=-1)
+    try:
+        Hinv = np.linalg.inv(img.homography)
+        kp2_t_Hinv = apply_homography(
+            kp2, Hinv
+        )
+        mask2 = \
+            np.all(kp2_t_Hinv >= [0, 0], axis=-1) & np.all(kp2_t_Hinv < [width, height], axis=-1)
+    except np.linalg.LinAlgError:
+        mask2 = np.full((kp1.shape[0],), True)
+        logger.error(f"Unable to invert homography from '{img.filepath}'")
+    kp1 = kp1[mask1]
+    des1 = des1[mask1]
+    kp2 = kp2[mask2]
+    des2 = des2[mask2]
     return Features(
         img,
         kp1 * scaling1, des1,
         kp2 * scaling2, des2
     )
 
-def get_matches(features: Features, norm: int, n_kpts: int, ratio_t: float) -> Matches:
-    matcher = cv2.BFMatcher_create(norm)
+def get_matches(features: Features, norm: int, n_kpts: int) -> Matches:
+    matcher = cv2.BFMatcher_create(norm, crossCheck=True)
     # match features
-    matches = matcher.knnMatch(
-        features.descriptors_1[:n_kpts],
-        features.descriptors_2[:n_kpts],
-        k=2
-    )
-    # use lowe's ratio test
-    matches = [m1 for m1, m2 in matches if m1.distance < ratio_t * m2.distance]
+    matches = matcher.match(features.descriptors_1[:n_kpts], features.descriptors_2[:n_kpts])
     # sort matches by distance
     matches = sorted(matches, key=lambda m: m.distance)
     # form 2d array of indices
-    match_indices = np.array([[x.queryIdx, x.trainIdx] for x in matches])
+    match_indices = np.array([[x.queryIdx, x.trainIdx] for x in matches], dtype=np.int64)
     return Matches(
         features,
         match_indices.reshape(-1, 2)  # handle case for no matches -> (0, 2)
@@ -224,7 +238,6 @@ def make_plots(output_dir: str, homos: list[HomographyEvaluation],
 def run_benchmark(hpatches: HPatches, n_kpts: int,
              detector: Detector, norm = cv2.NORM_L2,
              output_dir: Optional[str] = '.',
-             ratio_test_value: float = 1.0,
              img_size_wh: tuple[int, int] = (640, 480),
              progress_bar: bool = True,
              N: Optional[int] = None,
@@ -240,7 +253,6 @@ def run_benchmark(hpatches: HPatches, n_kpts: int,
         compared.
     :param output_dir: Where the plots / tables will be saved. Leave as None to save nothing
         to disk.
-    :param ratio_test_value: Threshold used for Lowe's ratio test. 1.0 for disabled.
     :param img_size_wh: Image size (width and height) in pixels that each image in the dataset
         is resized to before running the detector.
     :param progress_bar: True to show a progress bar while running the benchmark.
@@ -268,7 +280,6 @@ def run_benchmark(hpatches: HPatches, n_kpts: int,
                 features,
                 norm,
                 n_kpts,
-                ratio_test_value
             )
             if len(matches.indices) >= 4:
                 homography_estimate = get_homography(
