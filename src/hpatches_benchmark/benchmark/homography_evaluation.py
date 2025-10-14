@@ -1,8 +1,10 @@
+from __future__ import annotations
 from dataclasses import dataclass
 from ndshapecheck import ShapeCheck
 import numpy as np
 
 from hpatches_benchmark.benchmark.homography_estimate import HomographyEstimate
+from hpatches_benchmark.benchmark.matches import Matches
 from hpatches_benchmark.benchmark.tabular import Tabular
 
 __all__ = ['HomographyEvaluation']
@@ -42,3 +44,14 @@ class HomographyEvaluation(Tabular):
     def table_body(self):
         return self.correct_homographies.tolist() + self.mean_localisation_err.tolist() \
             + [self.homography_estimate.kp_prediction.shape[0]]
+
+    @staticmethod
+    def construct_empty(matches: Matches,
+                        epsilon: np.ndarray[np.float64, 1]) -> HomographyEvaluation:
+        return HomographyEvaluation(
+            HomographyEstimate.construct_empty(matches),
+            epsilon,
+            np.full(epsilon.shape, np.nan),
+            np.full(epsilon.shape, 0),
+            np.inf
+        )

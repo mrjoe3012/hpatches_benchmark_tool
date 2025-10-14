@@ -1,3 +1,4 @@
+from __future__ import annotations
 from dataclasses import dataclass
 
 from ndshapecheck import ShapeCheck
@@ -36,3 +37,18 @@ class HomographyEstimate:
         assert sc('N,2').check(self.kp_ground_truth), sc.why
         assert sc('4, 2').check(self.corner_prediction), sc.why
         assert sc('4, 2').check(self.corner_ground_truth), sc.why
+
+    @property
+    def is_valid(self) -> bool:
+        return not bool(np.any(np.isnan(self.estimated_homography)))
+
+    @staticmethod
+    def construct_empty(matches: Matches) -> HomographyEstimate:
+        return HomographyEstimate(
+            matches,
+            np.full((3, 3), np.nan),
+            np.full((len(matches.indices), 2), np.nan),
+            np.full((len(matches.indices), 2), np.nan),
+            np.full((4, 2), np.nan),
+            np.full((4, 2), np.nan)
+        )
