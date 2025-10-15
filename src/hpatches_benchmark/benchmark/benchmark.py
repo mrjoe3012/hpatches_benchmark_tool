@@ -175,12 +175,10 @@ def evaluate_repeatability(features: Features, epsilon: np.ndarray,
         kp2[None] - kp1_t[:, None],
         axis=-1
     )
-    np.fill_diagonal(dist1, np.inf)
     dist2 = np.linalg.norm(
         kp1[None] - kp2_t[:, None],
         axis=-1
     )
-    np.fill_diagonal(dist2, np.inf)
     symmetrically_matched = \
         np.argmin(dist1, axis=-1) == np.argmin(dist2, axis=0)
     # check against correctness thresholds
