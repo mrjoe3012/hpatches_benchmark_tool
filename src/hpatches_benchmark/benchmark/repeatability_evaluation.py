@@ -1,8 +1,7 @@
+from __future__ import annotations
 from dataclasses import dataclass
-
 from ndshapecheck import ShapeCheck
 import numpy as np
-
 from hpatches_benchmark.benchmark.features import Features
 from hpatches_benchmark.benchmark.tabular import Tabular
 
@@ -35,3 +34,11 @@ class RepeatabilityEvaluation(Tabular):
     @property
     def table_body(self):
         return self.repeatability.tolist()
+
+    @staticmethod
+    def construct_empty(features: Features, epsilon: np.ndarray[np.float64, 1],
+                        n_kp: int) -> RepeatabilityEvaluation:
+        return RepeatabilityEvaluation(
+            features, epsilon,
+            np.full(epsilon.shape, 0.0), n_kp
+        )

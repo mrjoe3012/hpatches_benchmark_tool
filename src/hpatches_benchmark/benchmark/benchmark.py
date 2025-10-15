@@ -140,59 +140,55 @@ def evaluate_homography(homography_estimate: HomographyEstimate, epsilon: np.nda
         float(mean_corner_error)
     )
 
-def compute_repeatability_helper(transformed: np.ndarray, true: np.ndarray,
-                                 epsilon: np.ndarray, img_size: tuple[int, int]) -> np.ndarray:
-    transformed_within_img = np.all(transformed >= [0, 0], axis=-1) \
-        & np.all(transformed < img_size, axis=-1)
-    if transformed_within_img.size == 0 or true.size == 0:
-        return np.full(epsilon.shape, 0.0), np.full(epsilon.shape, 1.0)
-    dists = np.linalg.norm(
-        true[None, :] \
-            - transformed[transformed_within_img, None],
-        axis=-1
-    )
-    np.fill_diagonal(dists, np.inf)
-    min_dist = np.min(dists, axis=-1)
-    rep_mask = min_dist[None] <= epsilon[:, None]
-    return np.count_nonzero(rep_mask, axis=-1), np.count_nonzero(transformed_within_img)
-
 def evaluate_repeatability(features: Features, epsilon: np.ndarray,
-                           n_kp: int, img_size: tuple[int, int]) -> RepeatabilityEvaluation:
-    img1_shape = features.img.original_img_bgr.shape
-    img2_shape = features.img.transformed_img_bgr.shape
-    scale1 = [img_size[0] / img1_shape[1], img_size[1] / img1_shape[0]]
-    scale2 = [img_size[0] / img2_shape[1], img_size[1] / img2_shape[0]]
-    kp1, kp2 = features.keypoints_1[:n_kp], features.keypoints_2[:n_kp]
+                           n_kpts: int, img_size_wh: tuple[int, int]) -> RepeatabilityEvaluation:
+    og_height1, og_width1 = features.img.original_img_bgr.shape[:2]
+    og_height2, og_width2 = features.img.transformed_img_bgr.shape[:2]
+    width, height = img_size_wh
+    scale1 = [width / og_width1, height / og_height1]
+    scale2 = [width / og_width2, height / og_height2]
+    kp1, kp2 = features.keypoints_1[:n_kpts], features.keypoints_2[:n_kpts]
     kp1 = kp1 * scale1
     kp2 = kp2 * scale2
+    if len(kp1) == 0 or len(kp2) == 0:
+        return RepeatabilityEvaluation.construct_empty(features, epsilon, n_kpts)
     H = features.img.homography
-    kp1_transformed = apply_homography(
-        kp1, H
-    )
     try:
-        kp2_transformed = apply_homography(
-            kp2, np.linalg.inv(H)
-        )
+        H_inv = np.linalg.inv(H)
     except np.linalg.LinAlgError:
-        logger.error(f"Unable to invert homography from '{features.img.filepath}' {H=}")
-        repeatability = np.full(epsilon.shape, np.nan)
-    else:
-        img1_corr, n1 = compute_repeatability_helper(
-            kp1_transformed,
-            kp2,
-            epsilon,
-            img_size
-        )
-        img2_corr, n2 = compute_repeatability_helper(
-            kp2_transformed,
-            kp1,
-            epsilon,
-            img_size
-        )
-        repeatability = (img1_corr + img2_corr) / (n1 + n2)
-
+        logger.warning(f"Homography from {features.img.filepath} was not invertable.")
+        return RepeatabilityEvaluation.construct_empty(features, epsilon, n_kpts)
+    # transform both keypoints by ground truth
+    kp1_t = apply_homography(kp1, H)
+    kp2_t = apply_homography(kp2, H_inv)
+    # keep only points in mutually shared image region
+    kp1_mask = \
+        (np.all(kp1_t >= [0, 0], axis=-1)) & (np.all(kp1_t < [width, height], axis=-1))
+    kp2_mask = \
+        (np.all(kp2_t >= [0, 0], axis=-1)) & (np.all(kp2_t < [width, height], axis=-1))
+    kp1, kp1_t = kp1[kp1_mask] , kp1_t[kp1_mask]
+    kp2, kp2_t = kp2[kp2_mask], kp2_t[kp2_mask]
+    if len(kp1) == 0 or len(kp2) == 0:
+        return RepeatabilityEvaluation.construct_empty(features, epsilon, n_kpts)
+    # symmetrical nearest neighbour matching
+    dist1 = np.linalg.norm(
+        kp2[None] - kp1_t[:, None],
+        axis=-1
+    )
+    np.fill_diagonal(dist1, np.inf)
+    dist2 = np.linalg.norm(
+        kp1[None] - kp2_t[:, None],
+        axis=-1
+    )
+    np.fill_diagonal(dist2, np.inf)
+    symmetrically_matched = \
+        np.argmin(dist1, axis=-1) == np.argmin(dist2, axis=0)
+    # check against correctness thresholds
+    within_threshold = np.min(dist1, axis=-1)[None] <= epsilon[:, None]
+    repeatable = within_threshold & symmetrically_matched[None]
+    repeatability = np.count_nonzero(repeatable, axis=-1) / min(len(kp1), len(kp2))
     return RepeatabilityEvaluation(
-        features, epsilon, repeatability, n_kp
+        features, epsilon, repeatability, n_kpts
     )
 
 def make_plots(output_dir: str, homos: list[HomographyEvaluation],
