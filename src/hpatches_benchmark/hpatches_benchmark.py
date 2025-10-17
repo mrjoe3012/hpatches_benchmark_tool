@@ -11,6 +11,7 @@ from hpatches_benchmark.detectors.detector import Detector
 from hpatches_benchmark.detectors.sift import sift_detector
 from hpatches_benchmark.detectors.orb import orb_detector
 from hpatches_benchmark.detectors.superpoint import superpoint_detector
+from hpatches_benchmark.detectors.silk import silk_detector
 import cv2
 import os
 import argparse
@@ -102,8 +103,8 @@ def main() -> None:
     args = parser.parse_args()
     hpatches_dir = args.hpatches
     output_dir = args.output
-    detectors = [sift_detector, orb_detector, superpoint_detector]
-    norms = [cv2.NORM_L2, cv2.NORM_HAMMING, cv2.NORM_L2]
+    detectors = [sift_detector, orb_detector, superpoint_detector, silk_detector]
+    norms = [cv2.NORM_L2, cv2.NORM_HAMMING, cv2.NORM_L2, cv2.NORM_L2]
     try:
         from hpatches_benchmark.detectors.r2d2 import r2d2_detector
     except Exception as e:
