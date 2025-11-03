@@ -94,12 +94,12 @@ def get_homography(matches: Matches, img_size: tuple[int, int]) -> HomographyEst
         img_corners, H_true
     )
     kp1_t_pred = apply_homography(
-        kp1 * scale, H_pred
-    )
+        kp1, H_pred
+    ) * scale
     kp1_t_true = apply_homography(
-        kp1 * scale,
+        kp1,
         H_true
-    )
+    ) * scale
     return HomographyEstimate(
         matches,
         pred_homography,
@@ -148,8 +148,6 @@ def evaluate_repeatability(features: Features, epsilon: np.ndarray,
     scale1 = [width / og_width1, height / og_height1]
     scale2 = [width / og_width2, height / og_height2]
     kp1, kp2 = features.keypoints_1[:n_kpts], features.keypoints_2[:n_kpts]
-    kp1 = kp1 * scale1
-    kp2 = kp2 * scale2
     if len(kp1) == 0 or len(kp2) == 0:
         return RepeatabilityEvaluation.construct_empty(features, epsilon, n_kpts)
     H = features.img.homography
@@ -159,14 +157,16 @@ def evaluate_repeatability(features: Features, epsilon: np.ndarray,
         logger.warning(f"Homography from {features.img.filepath} was not invertable.")
         return RepeatabilityEvaluation.construct_empty(features, epsilon, n_kpts)
     # transform both keypoints by ground truth
-    kp1_t = apply_homography(kp1, H)
-    kp2_t = apply_homography(kp2, H_inv)
+    kp1_t = apply_homography(kp1, H) * scale1
+    kp2_t = apply_homography(kp2, H_inv) * scale2
+    kp1 = kp1 * scale1
+    kp2 = kp2 * scale2
     # keep only points in mutually shared image region
     kp1_mask = \
         (np.all(kp1_t >= [0, 0], axis=-1)) & (np.all(kp1_t < [width, height], axis=-1))
     kp2_mask = \
         (np.all(kp2_t >= [0, 0], axis=-1)) & (np.all(kp2_t < [width, height], axis=-1))
-    kp1, kp1_t = kp1[kp1_mask] , kp1_t[kp1_mask]
+    kp1, kp1_t = kp1[kp1_mask], kp1_t[kp1_mask]
     kp2, kp2_t = kp2[kp2_mask], kp2_t[kp2_mask]
     if len(kp1) == 0 or len(kp2) == 0:
         return RepeatabilityEvaluation.construct_empty(features, epsilon, n_kpts)
