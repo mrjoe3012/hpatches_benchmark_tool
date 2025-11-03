@@ -3,7 +3,10 @@ from hpatches_benchmark.benchmark.benchmark_result import BenchmarkResult
 from hpatches_benchmark.benchmark.features import Features
 from hpatches_benchmark.benchmark.homography_estimate import HomographyEstimate
 from hpatches_benchmark.benchmark.homography_evaluation import HomographyEvaluation
+from hpatches_benchmark.benchmark.homography_evaluation_iou import HomographyEvaluationIOU
 from hpatches_benchmark.benchmark.matches import Matches
+from hpatches_benchmark.benchmark.matching_score_evaluation import MatchingScoreEvaluation
+from hpatches_benchmark.benchmark.mma_evaluation import MMAEvaluation
 from hpatches_benchmark.benchmark.repeatability_evaluation import RepeatabilityEvaluation
 from hpatches_benchmark.dataset.hpatches import HPatches
 from tqdm import tqdm
@@ -15,12 +18,16 @@ from hpatches_benchmark.utils.logger import logger
 from hpatches_benchmark.utils.utils import apply_homography
 from os import path
 from hpatches_benchmark.benchmark.visualisation import *
+from shapely.geometry import Polygon
+from shapely.geometry.polygon import orient
 import numpy as np
 import os
 import cv2
 import matplotlib.pyplot as plt
 
 __all__ = ['run_benchmark']
+
+_DEFAULT_IOU_EPSILON = np.linspace(0, 1, 1_000)
 
 def get_features(img: ImageWithHomography, detector: Detector,
                  img_size: tuple[int, int]) -> Features:
@@ -39,16 +46,13 @@ def get_features(img: ImageWithHomography, detector: Detector,
         kp2 * scaling2, des2
     )
 
-def get_matches(features: Features, norm: int, n_kpts: int, ratio_t: float) -> Matches:
-    matcher = cv2.BFMatcher_create(norm)
+def get_matches(features: Features, norm: int, n_kpts: int) -> Matches:
+    matcher = cv2.BFMatcher_create(norm, crossCheck=True)
     # match features
-    matches = matcher.knnMatch(
+    matches = matcher.match(
         features.descriptors_1[:n_kpts],
         features.descriptors_2[:n_kpts],
-        k=2
     )
-    # use lowe's ratio test
-    matches = [m1 for m1, m2 in matches if m1.distance < ratio_t * m2.distance]
     # sort matches by distance
     matches = sorted(matches, key=lambda m: m.distance)
     # form 2d array of indices
@@ -140,6 +144,32 @@ def evaluate_homography(homography_estimate: HomographyEstimate, epsilon: np.nda
         float(mean_corner_error)
     )
 
+def evaluate_homography_iou(homography_estimate: HomographyEstimate,
+                            epsilon_iou: Optional[np.ndarray] = None) -> HomographyEvaluationIOU:
+    if np.any(np.isnan(homography_estimate.estimated_homography)):
+        return HomographyEvaluationIOU.construct_empty(
+            homography_estimate.matches, epsilon_iou
+        )
+    if epsilon_iou is None:
+        epsilon_iou = _DEFAULT_IOU_EPSILON.copy()
+    # permute corners so that they go CCW around the shell
+    permutation = [0, 2, 3, 1]
+    ground_truth_box = Polygon(homography_estimate.corner_ground_truth[permutation]) 
+    predicted_box = Polygon(homography_estimate.corner_prediction[permutation])
+    if predicted_box.is_valid:
+        intersection = ground_truth_box.intersection(predicted_box).area
+        union = ground_truth_box.union(predicted_box).area
+        iou = intersection / union
+    else:
+        iou = 0.0
+    correct_homo = iou >= epsilon_iou
+    return HomographyEvaluationIOU(
+        homography_estimate,
+        epsilon_iou,
+        correct_homo,
+        iou
+    )
+
 def evaluate_repeatability(features: Features, epsilon: np.ndarray,
                            n_kpts: int, img_size_wh: tuple[int, int]) -> RepeatabilityEvaluation:
     og_height1, og_width1 = features.img.original_img_bgr.shape[:2]
@@ -189,6 +219,72 @@ def evaluate_repeatability(features: Features, epsilon: np.ndarray,
         features, epsilon, repeatability, n_kpts
     )
 
+def evaluate_mma(matches: Matches, epsilon: np.ndarray,
+                 img_size: tuple[int, int]) -> MMAEvaluation:
+    og_height1, og_width1 = matches.features.img.original_img_bgr.shape[:2]
+    og_height2, og_width2 = matches.features.img.transformed_img_bgr.shape[:2]
+    width, height = img_size
+    scale1 = [width / og_width1, height / og_height1]
+    scale2 = [width / og_width2, height / og_height2]
+    kp1, kp2 = matches.features.keypoints_1, matches.features.keypoints_2
+    H = matches.features.img.homography
+    if len(matches.indices) == 0:
+        return MMAEvaluation.construct_empty(matches, epsilon)
+    kp1_matches = kp1[matches.indices[:, 0]]
+    kp2_matches = kp2[matches.indices[:, 1]] * scale2
+    kp1_w = apply_homography(kp1_matches, H) * scale1
+    distances = np.linalg.norm(
+        kp2_matches - kp1_w,
+        axis=-1
+    )
+    correct = distances <= np.expand_dims(epsilon, 1)
+    mma = np.count_nonzero(correct, axis=-1) / len(distances)
+    return MMAEvaluation(
+        matches,
+        epsilon,
+        mma
+    )
+
+def evaluate_matching_score(matches: Matches, epsilon: np.ndarray,
+                            img_size: tuple[int, int], n_kpts: int) -> MatchingScoreEvaluation:
+    width, height = img_size
+    def comp_m_score(kp1, kp2, H, match_indices, scale1, scale2):
+        kp1_w = apply_homography(
+            kp1, H
+        ) * scale1
+        in_view = np.all(kp1_w >= [0, 0], axis=-1) & np.all(kp1_w < [width, height], axis=-1)
+        if np.count_nonzero(in_view) == 0:
+            return np.full(epsilon.shape, 0)
+        matches_to_use = in_view[match_indices[:, 0]]
+        kp1_m = kp1_w[match_indices[matches_to_use, 0]]
+        kp2_m = kp2[match_indices[matches_to_use, 1]] * scale2
+        dist = np.linalg.norm(kp1_m - kp2_m, axis=-1)
+        correct = dist <= np.expand_dims(epsilon, 1)
+        return np.count_nonzero(correct, axis=-1) / np.count_nonzero(in_view)
+
+    og_height1, og_width1 = matches.features.img.original_img_bgr.shape[:2]
+    og_height2, og_width2 = matches.features.img.transformed_img_bgr.shape[:2]
+    scale1 = [width / og_width1, height / og_height1]
+    scale2 = [width / og_width2, height / og_height2]
+    kp1, kp2 = matches.features.keypoints_1, matches.features.keypoints_2
+    kp1 = kp1[:n_kpts]
+    kp2 = kp2[:n_kpts]
+    H = matches.features.img.homography
+    try:
+        H_inv = np.linalg.inv(H)
+    except np.linalg.LinAlgError:
+        logger.error(f"Unable to invert homography from {matches.features.img.filepath}")
+        return MatchingScoreEvaluation.construct_empty(matches, epsilon)
+    scores1 = comp_m_score(
+        kp1, kp2, H, matches.indices, scale1, scale2
+    )
+    scores2 = comp_m_score(
+        kp2, kp1, H_inv, matches.indices[:, ::-1], scale2, scale1
+    )
+    return MatchingScoreEvaluation(
+        matches, epsilon, (scores1 + scores2) / 2
+    )
+
 def make_plots(output_dir: str, homos: list[HomographyEvaluation],
                n_kpts: int, N: int  = 3) -> None:
     """
@@ -222,7 +318,6 @@ def make_plots(output_dir: str, homos: list[HomographyEvaluation],
 def run_benchmark(hpatches: HPatches, n_kpts: int,
              detector: Detector, norm = cv2.NORM_L2,
              output_dir: Optional[str] = '.',
-             ratio_test_value: float = 1.0,
              img_size_wh: tuple[int, int] = (640, 480),
              progress_bar: bool = True,
              N: Optional[int] = None,
@@ -238,7 +333,6 @@ def run_benchmark(hpatches: HPatches, n_kpts: int,
         compared.
     :param output_dir: Where the plots / tables will be saved. Leave as None to save nothing
         to disk.
-    :param ratio_test_value: Threshold used for Lowe's ratio test. 1.0 for disabled.
     :param img_size_wh: Image size (width and height) in pixels that each image in the dataset
         is resized to before running the detector.
     :param progress_bar: True to show a progress bar while running the benchmark.
@@ -253,7 +347,10 @@ def run_benchmark(hpatches: HPatches, n_kpts: int,
     if N is None:
         N = len(hpatches.image_sets)
     homo = []
+    homo_iou = []
     rep = []
+    mma = []
+    m_score = []
     for img_set in pbar(hpatches.image_sets[:N], desc=f'Benchmarking {experiment_name}'):
         img_set: ImageSet
         for img_with_homo in img_set.images:
@@ -266,7 +363,12 @@ def run_benchmark(hpatches: HPatches, n_kpts: int,
                 features,
                 norm,
                 n_kpts,
-                ratio_test_value
+            )
+            mma_evaluation = evaluate_mma(
+                matches, epsilon, img_size_wh
+            )
+            m_score_evalaution = evaluate_matching_score(
+                matches, epsilon, img_size_wh, n_kpts
             )
             if len(matches.indices) >= 4:
                 homography_estimate = get_homography(
@@ -276,9 +378,15 @@ def run_benchmark(hpatches: HPatches, n_kpts: int,
                     homography_evaluation = evaluate_homography(
                         homography_estimate, epsilon
                     )
+                    homography_evaluation_iou = evaluate_homography_iou(
+                        homography_estimate  # leave epsilon None, different epsilon is used for IOU
+                    )
                 else:
                     homography_evaluation = HomographyEvaluation.construct_empty(
                         matches, epsilon
+                    )
+                    homography_evaluation_iou = HomographyEvaluationIOU.construct_empty(
+                        matches, _DEFAULT_IOU_EPSILON
                     )
             else:
                 logger.warning(f"Less than four matches for '{img_with_homo.filepath}'!")
@@ -289,7 +397,10 @@ def run_benchmark(hpatches: HPatches, n_kpts: int,
                 features, epsilon, n_kpts, img_size_wh
             )
             homo.append(homography_evaluation)
+            homo_iou.append(homography_evaluation_iou)
             rep.append(repeatability_evaluation)
+            mma.append(mma_evaluation)
+            m_score.append(m_score_evalaution)
     if output_dir is not None:
         if path.exists(output_dir) and not path.isdir(output_dir):
             logger.warning(f"'{output_dir}' exists and is not a directory.")
@@ -300,4 +411,4 @@ def run_benchmark(hpatches: HPatches, n_kpts: int,
                     if x.homography_estimate.matches.features.img.task == 'viewpoint'
             ]
             make_plots(output_dir, homo_viewpoint_only, n_kpts)
-    return BenchmarkResult(hpatches, homo, rep)
+    return BenchmarkResult(hpatches, homo, homo_iou, rep, mma, m_score)

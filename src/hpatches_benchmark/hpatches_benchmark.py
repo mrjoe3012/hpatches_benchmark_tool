@@ -28,6 +28,8 @@ def evaluate_detectors(detectors: list[Detector], norms: list[int], output_root:
     :parma output_root: Where outputs are saved.
     :param hpatches_directory: Path to the extract HPatches sequences dataset.
     """
+    pd.set_option('display.max_rows', None)
+    pd.set_option('display.max_columns', None)
     timestamp = datetime.now().strftime('%d_%m_%y__%H_%M_%S')
     names = [fn.__name__ for fn in detectors]
     output_root = f'{output_root}/{timestamp}'

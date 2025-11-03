@@ -16,6 +16,7 @@ dependencies = [
     "torch>=2.8.0",
     "tqdm~=4.67.1",
     "silk @ git+https://github.com/mrjoe3012/silk.git@v1.0",
+    "shapely>=2.1.2",
 ]
 
 [project.scripts]
