@@ -11,6 +11,7 @@ from hpatches_benchmark.benchmark.tabular import Tabular
 from hpatches_benchmark.dataset.hpatches import HPatches
 import pandas as pd
 import numpy as np
+import re
 
 @dataclass
 class BenchmarkResult:
@@ -78,14 +79,16 @@ class BenchmarkResult:
             + self.repeatability_evaluation[0].table_headings \
             + self.mma_evaluation[0].table_headings \
             + self.m_score_evaluation[0].table_headings \
+            + self.homography_evaluation_iou[0].table_headings \
             + self.homography_evaluation_iou_summary.table_headings
         body = [
             homo.table_body + rep.table_body + mma.table_body + ms.table_body \
-                + self.homography_evaluation_iou_summary.table_body
-                    for homo, rep, mma, ms in zip(self.homography_evaluation,
+                + iou.table_body + self.homography_evaluation_iou_summary.table_body
+                    for homo, rep, mma, ms, iou in zip(self.homography_evaluation,
                                             self.repeatability_evaluation,
                                             self.mma_evaluation,
                                             self.m_score_evaluation,
+                                            self.homography_evaluation_iou,
                                             strict=True)
         ]
         return pd.DataFrame(data=body, columns=headings)
@@ -95,13 +98,30 @@ class BenchmarkResult:
         full_df = self.dataframe
         homo_df = full_df[[col for col in full_df.columns if 'Correct Homo' in col and 'IOU' not in col]]
         homo_stats = homo_df.mean()
+        homo_stderr = pd.Series([homo_stats.std()], ['Correct Homo Std Err'])
         mle_df = full_df[[col for col in full_df.columns if 'MLE' in col]]
         n_pts = full_df['Num Points'].to_numpy()
         mle_sum = mle_df.mul(n_pts[:, None])
         mle_stats = mle_sum.sum() / np.sum(n_pts)
+        mle_stderr = pd.Series([mle_stats.std()], ['MLE Std Err'])
         repeatability_stats = full_df[[col for col in full_df.columns if 'Rep' in col]].mean()
+        repeatability_stderr = pd.Series([repeatability_stats.std()], ['Repeatability Std Err'])
         mma_stats = full_df[[col for col in full_df.columns if 'MMA' in col]].mean()
+        mma_stderr = pd.Series([mma_stats.std()], ['MMA Std Err'])
         ms_stats = full_df[[col for col in full_df.columns if 'M SCORE' in col]].mean()
+        ms_stderr = pd.Series([ms_stats.std()], ['M SCORE Std Err'])
         homo_iou_stats = full_df[[col for col in full_df.columns if 'IOU' in col]].mean()
-        joined = pd.concat([homo_stats, homo_iou_stats, mle_stats, repeatability_stats, mma_stats, ms_stats], axis=0).to_frame().T
+        joined = pd.concat([
+            homo_stats, homo_stderr,
+            homo_iou_stats,
+            mle_stats, mle_stderr,
+            repeatability_stats, repeatability_stderr,
+            mma_stats, mma_stderr,
+            ms_stats, ms_stderr
+        ], axis=0).to_frame().T
+        # trim down the epsilon thresholds to only 1, 3, 5
+        joined = joined[[
+            col for col in joined.columns 
+                if '@' not in col or re.search(r'@ [135]\.00', col) is not None
+        ]]
         return joined

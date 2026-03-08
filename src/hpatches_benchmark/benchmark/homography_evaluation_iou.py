@@ -29,6 +29,14 @@ class HomographyEvaluationIOU:
         assert sc('N').check(self.epsilon)
         assert sc('N').check(self.correct_homographies)
 
+    @property
+    def table_headings(self):
+        return [f'IOU @ {eps}' for eps in self.epsilon]
+
+    @property
+    def table_body(self):
+        return self.correct_homographies.tolist()
+
     @staticmethod
     def construct_empty(matches: Matches,
                         epsilon: np.ndarray[np.float64, 1]) -> HomographyEvaluationIOU:

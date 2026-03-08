@@ -15,6 +15,7 @@ from hpatches_benchmark.detectors.silk import silk_detector
 import cv2
 import os
 import argparse
+import numpy as np
 
 __all__ = ['evaluate_detectors', 'main']
 
@@ -48,6 +49,7 @@ def evaluate_detectors(detectors: list[Detector], norms: list[int], output_root:
             norm=norm,
             output_dir=output_dir,
             experiment_name=name,
+            epsilon=np.linspace(0.0, 5, 501)[1:],
             # N=3
         )
         intensity, viewpoint = results.split_by_task()
