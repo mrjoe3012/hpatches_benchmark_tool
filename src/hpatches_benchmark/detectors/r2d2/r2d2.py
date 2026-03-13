@@ -1,5 +1,6 @@
 from r2d2.extract import load_model, get_checkpoint_path, process_img
 import torch
+import numpy as np
 
 __all__ = ['r2d2_detector']
 
@@ -13,4 +14,5 @@ def r2d2_detector(img):
     xys, desc = process_img(
         img, _model, is_bgr=True
     )
-    return xys[:, :2], desc
+    sorted_indices = np.argsort(xys[:, 2])[::-1]
+    return xys[sorted_indices, :2], desc[sorted_indices]
