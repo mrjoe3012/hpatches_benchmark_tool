@@ -44,13 +44,13 @@ def evaluate_detectors(detectors: list[Detector], norms: list[int], output_root:
         output_dir = path.join(output_root, name)
         results = run_benchmark(
             hpatches=hpatches,
-            n_kpts=1000,
+            n_kpts=2000,
             detector=detector_fn,
             norm=norm,
             output_dir=output_dir,
             experiment_name=name,
             epsilon=np.linspace(0.0, 5, 501)[1:],
-            # N=3
+            # N=10
         )
         intensity, viewpoint = results.split_by_task()
         intensity_full = intensity.dataframe
