@@ -29,29 +29,65 @@ __all__ = ['run_benchmark']
 
 _DEFAULT_IOU_EPSILON = np.linspace(0, 1, 1_000)
 
-def get_features(img: ImageWithHomography, detector: Detector) -> Features:
+def get_features(img: ImageWithHomography, detector: Detector, match_shared: bool, img_wh: tuple[int, int], n_kpts: int) -> Features:
+    width, height = img_wh
     og_img = img.original_img_bgr
     transformed_img = img.transformed_img_bgr
     # detect features
     kp1, des1 = detector(og_img)
     kp2, des2 = detector(transformed_img)
+    h_inv = np.linalg.inv(img.homography)
+    if match_shared:
+        kp1_T = apply_homography(kp1, img.homography) 
+        kp2_T = apply_homography(kp2, h_inv)
+        in_view1 = np.all(kp1_T >= [0, 0], axis=-1) & np.all(kp1_T < [width, height], axis=-1)
+        in_view2 = np.all(kp2_T >= [0, 0], axis=-1) & np.all(kp2_T < [width, height], axis=-1)
+        best_kp1 = np.arange(len(kp1))[in_view1][:n_kpts]
+        best_kp2 = np.arange(len(kp2))[in_view2][:n_kpts]
+    else:
+        best_kp1 = np.arange(len(kp1))[:n_kpts]
+        best_kp2 = np.arange(len(kp2))[:n_kpts]
+
     return Features(
         img,
         kp1, des1,
-        kp2, des2
+        kp2, des2,
+        best_keypoints1_indices=best_kp1,
+        best_keypoints2_indices=best_kp2
     )
 
-def get_matches(features: Features, norm: int, n_kpts: int) -> Matches:
+def get_matches(features: Features, homography: np.ndarray, norm: int,
+                match_shared: bool, img_size_wh: tuple[int, int]) -> Matches:
     matcher = cv2.BFMatcher_create(norm, crossCheck=True)
+    desc1 = features.descriptors_1[:n_kpts]
+    desc2 = features.descriptors_2[:n_kpts]
+    if match_shared:
+        width, height = img_size_wh
+        kp1 = features.keypoints_1[:n_kpts]
+        kp2 = features.keypoints_2[:n_kpts]
+        kp1_T = apply_homography(kp1, homography)
+        H_inv = np.linalg.inv(homography)
+        kp2_T = apply_homography(kp2, H_inv)
+        in_view1 = np.all(kp1_T >= [0, 0], axis=-1) & np.all(kp1_T < [width, height], axis=-1)
+        in_view2 = np.all(kp2_T >= [0, 0], axis=-1) & np.all(kp2_T < [width, height], axis=-1)
+        desc1 = desc1[in_view1]
+        desc2 = desc2[in_view2]
     # match features
-    matches = matcher.match(
-        features.descriptors_1[:n_kpts],
-        features.descriptors_2[:n_kpts],
-    )
+    try:
+        matches = matcher.match(
+            desc1,
+            desc2
+        )
+    except:
+        logger.warning(f"Matching failed for {features.img.filepath}")
+        matches = []
     # sort matches by distance
     matches = sorted(matches, key=lambda m: m.distance)
     # form 2d array of indices
     match_indices = np.array([[x.queryIdx, x.trainIdx] for x in matches])
+    if match_shared and len(matches) > 0:
+        match_indices[:, 0] = np.arange(len(kp1))[in_view1][match_indices[:, 0]]
+        match_indices[:, 1] = np.arange(len(kp2))[in_view2][match_indices[:, 1]]
     return Matches(
         features,
         match_indices.reshape(-1, 2)  # handle case for no matches -> (0, 2)
@@ -197,18 +233,15 @@ def evaluate_repeatability(features: Features, epsilon: np.ndarray,
     if len(kp1) == 0 or len(kp2) == 0:
         return RepeatabilityEvaluation.construct_empty(features, epsilon, n_kpts)
     # symmetrical nearest neighbour matching
-    dist1 = np.linalg.norm(
+    dist = np.linalg.norm(
         kp2[None] - kp1_t[:, None],
         axis=-1
     )
-    dist2 = np.linalg.norm(
-        kp1[None] - kp2_t[:, None],
-        axis=-1
-    )
-    symmetrically_matched = \
-        np.argmin(dist1, axis=-1) == np.argmin(dist2, axis=0)
+    nearest_1 = np.argmin(dist, axis=0)
+    nearest_2 = np.argmin(dist, axis=1)
+    symmetrically_matched = nearest_2[nearest_1] == np.arange(len(nearest_1))
     # check against correctness thresholds
-    within_threshold = np.min(dist1, axis=-1)[None] <= epsilon[:, None]
+    within_threshold = np.min(dist, axis=0)[None] <= epsilon[:, None]
     repeatable = within_threshold & symmetrically_matched[None]
     repeatability = np.count_nonzero(repeatable, axis=-1) / min(len(kp1), len(kp2))
     return RepeatabilityEvaluation(
@@ -237,6 +270,8 @@ def evaluate_mma(matches: Matches, epsilon: np.ndarray) -> MMAEvaluation:
 
 def evaluate_matching_score(matches: Matches, epsilon: np.ndarray, n_kpts: int,
                             img_size: tuple[int, int]) -> MatchingScoreEvaluation:
+    if matches.indices.shape[0] == 0:
+        return MatchingScoreEvaluation.construct_empty(matches, epsilon)
     width, height = img_size
     def comp_m_score(kp1, kp2, H, match_indices):
         kp1_w = apply_homography(
@@ -308,7 +343,8 @@ def run_benchmark(hpatches: HPatches, n_kpts: int,
              progress_bar: bool = True,
              N: Optional[int] = None,
              epsilon: Optional[list[float]] = None,
-             experiment_name: str = '') -> BenchmarkResult:
+             experiment_name='',
+             match_shared: bool = False) -> BenchmarkResult:
     """
     Run the benchmark on the hpatches dataset, keeping a maximum of n_kpts from the detector.
     :param hpatches: The dataset instance.
@@ -325,6 +361,7 @@ def run_benchmark(hpatches: HPatches, n_kpts: int,
     :param N: The number of image sets to process. Leave as None to use them all.
     :param epsilon: The thresholds to use for computing metrics. Leave as None for default
         of 1, 3, 5
+    :param match_shared: If True, only attempt to match keypoints in the shared viewpoint region.
     """
     if epsilon is None:
         epsilon = [1, 3, 5]
@@ -344,11 +381,17 @@ def run_benchmark(hpatches: HPatches, n_kpts: int,
             features = get_features(
                 img_with_homo,
                 detector,
+                match_shared,
+                img_size_wh,
+                n_kpts
             )
             matches = get_matches(
                 features,
+                img_with_homo.homography,
                 norm,
                 n_kpts,
+                match_shared,
+                img_size_wh
             )
             mma_evaluation = evaluate_mma(
                 matches, epsilon
