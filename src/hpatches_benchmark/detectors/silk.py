@@ -9,7 +9,7 @@ __all__ = ['silk_detector']
 _model = load_model(nms=0.0)
 _model = _model.eval()
 if torch.cuda.is_available():
-    model = _model.cuda()
+    _model = _model.cuda()
 
 def silk_detector(img: np.ndarray):
     if len(img.shape) == 3:
@@ -18,8 +18,8 @@ def silk_detector(img: np.ndarray):
     if torch.cuda.is_available():
         img_tensor = img_tensor.cuda()
     with torch.no_grad():
-        kps, des = model(img_tensor)
-        kps = from_feature_coords_to_image_coords(model, kps)
+        kps, des = _model(img_tensor)
+        kps = from_feature_coords_to_image_coords(_model, kps)
         kps = kps[0].detach().cpu().numpy()
         des = des[0].detach().cpu().numpy()
     kp = kps[:, [1, 0]]
