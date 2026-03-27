@@ -1,5 +1,6 @@
 from typing import Optional
 from matplotlib.axes import Axes
+from hpatches_benchmark.benchmark.features import Features
 from matplotlib.collections import LineCollection
 import numpy as np
 
@@ -69,34 +70,36 @@ def plot_homography(ax: Axes, img1: np.ndarray, img2: np.ndarray,
     ax.legend()
 
 def plot_matches(ax: Axes, img1: np.ndarray, img2: np.ndarray,
-                 kp1: np.ndarray, kp2: np.ndarray,
+                 features: Features,
                  matches: np.ndarray,
                  kp_marker_size: Optional[int] = None) -> None:
+    kp1, kp2 = features.keypoints_1, features.keypoints_2
     if kp_marker_size is None:
         kp_marker_size = _kp_marker_size
     plot_imgs_side_by_side(ax, img1, img2)
-    correspondences = LineCollection(
-        np.stack([kp1[matches[:, 0]], kp2[matches[:, 1]] + [img1.shape[1], 0]], axis=-2),
-        color='green'
-    )
-    ax.add_collection(correspondences)
-    kp1_mask = np.full((kp1.shape[0],), False)
-    kp1_mask[matches[:, 0]] = True
-    kp2_mask = np.full((kp2.shape[0],), False)
-    kp2_mask[matches[:, 1]] = True
-    ax.scatter(
-        kp1[kp1_mask, 0], kp1[kp1_mask, 1],
-        facecolor='none', color='blue', s=kp_marker_size
-    )
-    ax.scatter(
-        kp1[~kp1_mask, 0], kp1[~kp1_mask, 1],
-        facecolor='none', color='red', s=kp_marker_size
-    )
-    ax.scatter(
-        kp2[kp2_mask, 0] + img1.shape[1], kp2[kp2_mask, 1],
-        facecolor='none', color='blue', s=kp_marker_size
-    )
-    ax.scatter(
-        kp2[~kp2_mask, 0] + img1.shape[1], kp2[~kp2_mask, 1],
-        facecolor='none', color='red', s=kp_marker_size
-    )
+    if len(matches) > 0:
+        correspondences = LineCollection(
+            np.stack([kp1[matches[:, 0]], kp2[matches[:, 1]] + [img1.shape[1], 0]], axis=-2),
+            color='green'
+        )
+        ax.add_collection(correspondences)
+        kp1_mask = np.full((kp1.shape[0],), False)
+        kp1_mask[matches[:, 0]] = True
+        kp2_mask = np.full((kp2.shape[0],), False)
+        kp2_mask[matches[:, 1]] = True
+        ax.scatter(
+            kp1[kp1_mask, 0], kp1[kp1_mask, 1],
+            facecolor='none', color='blue', s=kp_marker_size
+        )
+        ax.scatter(
+            kp1[~kp1_mask, 0], kp1[~kp1_mask, 1],
+            facecolor='none', color='red', s=kp_marker_size
+        )
+        ax.scatter(
+            kp2[kp2_mask, 0] + img1.shape[1], kp2[kp2_mask, 1],
+            facecolor='none', color='blue', s=kp_marker_size
+        )
+        ax.scatter(
+            kp2[~kp2_mask, 0] + img1.shape[1], kp2[~kp2_mask, 1],
+            facecolor='none', color='red', s=kp_marker_size
+        )

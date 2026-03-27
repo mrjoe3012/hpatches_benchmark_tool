@@ -20,7 +20,8 @@ import numpy as np
 __all__ = ['evaluate_detectors', 'main']
 
 def evaluate_detectors(detectors: list[Detector], norms: list[int], output_root: str,
-                       hpatches_directory: str) -> None:
+                       hpatches_directory: str, match_shared: bool, n_kpts: int,
+                       add_noise: bool) -> None:
     """
     Evaluates the provided detector functions, each taking a BGR image and returning
         keypoints (N,2) and descriptors (N, D).
@@ -44,13 +45,15 @@ def evaluate_detectors(detectors: list[Detector], norms: list[int], output_root:
         output_dir = path.join(output_root, name)
         results = run_benchmark(
             hpatches=hpatches,
-            n_kpts=2000,
+            n_kpts=n_kpts,
             detector=detector_fn,
             norm=norm,
             output_dir=output_dir,
             experiment_name=name,
             epsilon=np.linspace(0.0, 5, 501)[1:],
-            # N=10
+            # N=10,
+            match_shared=match_shared,
+            add_noise=add_noise
         )
         intensity, viewpoint = results.split_by_task()
         intensity_full = intensity.dataframe
@@ -104,6 +107,9 @@ def main() -> None:
     parser.add_argument('--hpatches', type=str, required=True, help='Path to HPatches' \
         ' dataset directory.')
     parser.add_argument('--output', type=str, default='.')
+    parser.add_argument('--match-shared', action='store_true', default=False)
+    parser.add_argument('--num-keypoints', type=int, default=2000)
+    parser.add_argument('--noise', action='store_true', default=False)
     args = parser.parse_args()
     hpatches_dir = args.hpatches
     output_dir = args.output
@@ -129,6 +135,8 @@ def main() -> None:
     evaluate_detectors(
         detectors, norms,
         output_root=output_dir, hpatches_directory=hpatches_dir,
+        match_shared=args.match_shared, n_kpts=args.num_keypoints,
+        add_noise=args.noise
     )
 
 if __name__ == '__main__': main()

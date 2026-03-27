@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from ndshapecheck import ShapeCheck
+from typing import Optional
 
 import numpy as np
 
@@ -16,12 +17,16 @@ class Features:
     :param keypoints_2: The keypoints detected from the second image (M,2).
     :param descriptors_1: The descriptors, parallel to keypoints_1. (N,D)
     :param descriptors_2: The descriptors, parallel to keypoints_2. (M,D)
+    :param best_keypoints1: Indices of the top n keypoints
+    :param best_keypoints2:
     """
     img: ImageWithHomography
     keypoints_1: np.ndarray
     descriptors_1: np.ndarray
     keypoints_2: np.ndarray
     descriptors_2: np.ndarray
+    best_keypoints1_indices: np.ndarray
+    best_keypoints2_indices: np.ndarray
 
     def __post_init__(self) -> None:
         sc = ShapeCheck()

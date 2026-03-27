@@ -20,6 +20,7 @@ from os import path
 from hpatches_benchmark.benchmark.visualisation import *
 from shapely.geometry import Polygon
 from shapely.errors import GEOSException
+from numpy.random import RandomState
 import numpy as np
 import os
 import cv2
@@ -56,22 +57,10 @@ def get_features(img: ImageWithHomography, detector: Detector, match_shared: boo
         best_keypoints2_indices=best_kp2
     )
 
-def get_matches(features: Features, homography: np.ndarray, norm: int,
-                match_shared: bool, img_size_wh: tuple[int, int]) -> Matches:
+def get_matches(features: Features, norm: int) -> Matches:
     matcher = cv2.BFMatcher_create(norm, crossCheck=True)
-    desc1 = features.descriptors_1[:n_kpts]
-    desc2 = features.descriptors_2[:n_kpts]
-    if match_shared:
-        width, height = img_size_wh
-        kp1 = features.keypoints_1[:n_kpts]
-        kp2 = features.keypoints_2[:n_kpts]
-        kp1_T = apply_homography(kp1, homography)
-        H_inv = np.linalg.inv(homography)
-        kp2_T = apply_homography(kp2, H_inv)
-        in_view1 = np.all(kp1_T >= [0, 0], axis=-1) & np.all(kp1_T < [width, height], axis=-1)
-        in_view2 = np.all(kp2_T >= [0, 0], axis=-1) & np.all(kp2_T < [width, height], axis=-1)
-        desc1 = desc1[in_view1]
-        desc2 = desc2[in_view2]
+    desc1 = features.descriptors_1[features.best_keypoints1_indices]
+    desc2 = features.descriptors_2[features.best_keypoints2_indices]
     # match features
     try:
         matches = matcher.match(
@@ -85,9 +74,9 @@ def get_matches(features: Features, homography: np.ndarray, norm: int,
     matches = sorted(matches, key=lambda m: m.distance)
     # form 2d array of indices
     match_indices = np.array([[x.queryIdx, x.trainIdx] for x in matches])
-    if match_shared and len(matches) > 0:
-        match_indices[:, 0] = np.arange(len(kp1))[in_view1][match_indices[:, 0]]
-        match_indices[:, 1] = np.arange(len(kp2))[in_view2][match_indices[:, 1]]
+    if len(matches) > 0:
+        match_indices[:, 0] = features.best_keypoints1_indices[match_indices[:, 0]]
+        match_indices[:, 1] = features.best_keypoints2_indices[match_indices[:, 1]]
     return Matches(
         features,
         match_indices.reshape(-1, 2)  # handle case for no matches -> (0, 2)
@@ -208,45 +197,20 @@ def evaluate_homography_iou(homography_estimate: HomographyEstimate,
 
 def evaluate_repeatability(features: Features, epsilon: np.ndarray,
                            n_kpts: int, img_size_wh: tuple[int, int]) -> RepeatabilityEvaluation:
-    width, height = img_size_wh
-    kp1, kp2 = features.keypoints_1[:n_kpts], features.keypoints_2[:n_kpts]
-    if len(kp1) == 0 or len(kp2) == 0:
+    kp1, kp2 = features.keypoints_1, features.keypoints_2
+    kp1, kp2 = kp1[features.best_keypoints1_indices], kp2[features.best_keypoints2_indices]
+    N1, N2 = len(kp1), len(kp2)
+    kp1_h_true = apply_homography(kp1, features.img.homography)
+    dist = np.linalg.norm(kp1_h_true[:, None] - kp2[None], axis=-1)
+    if N1 == 0 or N2 == 0:
         return RepeatabilityEvaluation.construct_empty(features, epsilon, n_kpts)
-    H = features.img.homography
-    try:
-        H_inv = np.linalg.inv(H)
-    except np.linalg.LinAlgError:
-        logger.warning(f"Homography from {features.img.filepath} was not invertable.")
-        return RepeatabilityEvaluation.construct_empty(features, epsilon, n_kpts)
-    # transform both keypoints by ground truth
-    kp1_t = apply_homography(kp1, H) 
-    kp2_t = apply_homography(kp2, H_inv)
-    kp1 = kp1
-    kp2 = kp2
-    # keep only points in mutually shared image region
-    kp1_mask = \
-        (np.all(kp1_t >= [0, 0], axis=-1)) & (np.all(kp1_t < [width, height], axis=-1))
-    kp2_mask = \
-        (np.all(kp2_t >= [0, 0], axis=-1)) & (np.all(kp2_t < [width, height], axis=-1))
-    kp1, kp1_t = kp1[kp1_mask], kp1_t[kp1_mask]
-    kp2, kp2_t = kp2[kp2_mask], kp2_t[kp2_mask]
-    if len(kp1) == 0 or len(kp2) == 0:
-        return RepeatabilityEvaluation.construct_empty(features, epsilon, n_kpts)
-    # symmetrical nearest neighbour matching
-    dist = np.linalg.norm(
-        kp2[None] - kp1_t[:, None],
-        axis=-1
-    )
-    nearest_1 = np.argmin(dist, axis=0)
-    nearest_2 = np.argmin(dist, axis=1)
-    symmetrically_matched = nearest_2[nearest_1] == np.arange(len(nearest_1))
-    # check against correctness thresholds
-    within_threshold = np.min(dist, axis=0)[None] <= epsilon[:, None]
-    repeatable = within_threshold & symmetrically_matched[None]
-    repeatability = np.count_nonzero(repeatable, axis=-1) / min(len(kp1), len(kp2))
+    rep1 = np.min(dist, axis=0)[:, None] <= epsilon
+    rep2 = np.min(dist, axis=1)[:, None] <= epsilon
+    repeatability = (np.count_nonzero(rep1, axis=0) + np.count_nonzero(rep2, axis=0)) / (N1 + N2)
     return RepeatabilityEvaluation(
         features, epsilon, repeatability, n_kpts
-    )
+    ) 
+
 
 def evaluate_mma(matches: Matches, epsilon: np.ndarray) -> MMAEvaluation:
     kp1, kp2 = matches.features.keypoints_1, matches.features.keypoints_2
@@ -268,7 +232,7 @@ def evaluate_mma(matches: Matches, epsilon: np.ndarray) -> MMAEvaluation:
         mma
     )
 
-def evaluate_matching_score(matches: Matches, epsilon: np.ndarray, n_kpts: int,
+def evaluate_matching_score(matches: Matches, epsilon: np.ndarray,
                             img_size: tuple[int, int]) -> MatchingScoreEvaluation:
     if matches.indices.shape[0] == 0:
         return MatchingScoreEvaluation.construct_empty(matches, epsilon)
@@ -288,8 +252,17 @@ def evaluate_matching_score(matches: Matches, epsilon: np.ndarray, n_kpts: int,
         return np.count_nonzero(correct, axis=-1) / np.count_nonzero(in_view)
 
     kp1, kp2 = matches.features.keypoints_1, matches.features.keypoints_2
-    kp1 = kp1[:n_kpts]
-    kp2 = kp2[:n_kpts]
+    kp1, kp2 = kp1[matches.features.best_keypoints1_indices], kp2[matches.features.best_keypoints2_indices]
+    match_indices = matches.indices
+    inv1 = -np.ones(matches.features.keypoints_1.shape[0], dtype=int)
+    inv2 = -np.ones(matches.features.keypoints_2.shape[0], dtype=int)
+    inv1[matches.features.best_keypoints1_indices] = np.arange(len(matches.features.best_keypoints1_indices))
+    inv2[matches.features.best_keypoints2_indices] = np.arange(len(matches.features.best_keypoints2_indices))
+    match_indices = matches.indices  # original space
+    fi1 = inv1[match_indices[:, 0]]
+    fi2 = inv2[match_indices[:, 1]]
+    valid = (fi1 >= 0) & (fi2 >= 0)
+    match_indices = np.stack([fi1[valid], fi2[valid]], axis=1)
     H = matches.features.img.homography
     try:
         H_inv = np.linalg.inv(H)
@@ -297,17 +270,16 @@ def evaluate_matching_score(matches: Matches, epsilon: np.ndarray, n_kpts: int,
         logger.error(f"Unable to invert homography from {matches.features.img.filepath}")
         return MatchingScoreEvaluation.construct_empty(matches, epsilon)
     scores1 = comp_m_score(
-        kp1, kp2, H, matches.indices
+        kp1, kp2, H, match_indices
     )
     scores2 = comp_m_score(
-        kp2, kp1, H_inv, matches.indices[:, ::-1]
+        kp2, kp1, H_inv, match_indices[:, ::-1]
     )
     return MatchingScoreEvaluation(
         matches, epsilon, (scores1 + scores2) / 2
     )
 
-def make_plots(output_dir: str, homos: list[HomographyEvaluation],
-               n_kpts: int, N: int  = 3) -> None:
+def make_plots(output_dir: str, homos: list[HomographyEvaluation], N: int  = 3) -> None:
     """
     Plot the N worst and N best from homography estimation.
     """
@@ -326,12 +298,12 @@ def make_plots(output_dir: str, homos: list[HomographyEvaluation],
             fig, axes = plt.subplots(2, 1, figsize=(12, 9))
             plot_homography(
                 axes[0], img.original_img_bgr, img.transformed_img_bgr,
-                features.keypoints_1[:n_kpts], homo.estimated_homography,
+                features.keypoints_1[features.best_keypoints1_indices], homo.estimated_homography,
                 img.homography
             )
             plot_matches(
                 axes[1], img.original_img_bgr, img.transformed_img_bgr,
-                features.keypoints_1[:n_kpts], features.keypoints_2[:n_kpts], matches.indices
+                features, matches.indices
             )
             fig.savefig(img_path)
             plt.close(fig)
@@ -344,7 +316,8 @@ def run_benchmark(hpatches: HPatches, n_kpts: int,
              N: Optional[int] = None,
              epsilon: Optional[list[float]] = None,
              experiment_name='',
-             match_shared: bool = False) -> BenchmarkResult:
+             match_shared: bool = False,
+             add_noise: bool = False) -> BenchmarkResult:
     """
     Run the benchmark on the hpatches dataset, keeping a maximum of n_kpts from the detector.
     :param hpatches: The dataset instance.
@@ -374,9 +347,12 @@ def run_benchmark(hpatches: HPatches, n_kpts: int,
     rep = []
     mma = []
     m_score = []
+    rng = RandomState(seed=0)
     for img_set in pbar(hpatches.image_sets[:N], desc=f'Benchmarking {experiment_name}'):
         img_set: ImageSet
         img_set = img_set.resize(img_size_wh[0], img_size_wh[1])
+        if add_noise:
+            img_set = img_set.add_noise(noise_sigma=15, blur_sigma=1, rng=rng)
         for img_with_homo in img_set.images:
             features = get_features(
                 img_with_homo,
@@ -387,17 +363,13 @@ def run_benchmark(hpatches: HPatches, n_kpts: int,
             )
             matches = get_matches(
                 features,
-                img_with_homo.homography,
                 norm,
-                n_kpts,
-                match_shared,
-                img_size_wh
             )
             mma_evaluation = evaluate_mma(
                 matches, epsilon
             )
             m_score_evalaution = evaluate_matching_score(
-                matches, epsilon, n_kpts, img_size_wh
+                matches, epsilon, img_size_wh
             )
             if len(matches.indices) >= 4:
                 homography_estimate = get_homography(
@@ -439,5 +411,5 @@ def run_benchmark(hpatches: HPatches, n_kpts: int,
                 x for x in homo
                     if x.homography_estimate.matches.features.img.task == 'viewpoint'
             ]
-            make_plots(output_dir, homo_viewpoint_only, n_kpts, N=30)
+            make_plots(output_dir, homo_viewpoint_only, N=3)
     return BenchmarkResult(hpatches, homo, homo_iou, rep, mma, m_score)
